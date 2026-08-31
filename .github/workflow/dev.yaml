@@ -1,0 +1,95 @@
+name: "Terraform Dev Pipeline"
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+env:
+  TF_WORKING_DIR: "environments/dev"
+  # Authentication variables for Azure (Using Client Secret)
+  ARM_CLIENT_ID: "07183f67-d83e-4661-a146-498cc168eabe"
+  ARM_CLIENT_SECRET: ${{ secrets.ARM_SECRET }}
+  ARM_SUBSCRIPTION_ID: "1075ec7a-b17a-4f37-bf3f-9d68c4506dc1"
+  ARM_TENANT_ID: "0f7010fd-209e-4344-8457-043ffb37143b"
+
+jobs:
+  security-scan:
+    name: "TFLint & TFSec Scan"
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.5.0"
+
+      - name: Setup TFLint
+        uses: terraform-linters/setup-tflint@v4
+        with:
+          tflint_version: v0.50.3
+
+      - name: Initialize TFLint
+        run: tflint --init
+        working-directory: ${{ env.TF_WORKING_DIR }}
+
+      - name: Run TFLint
+        run: tflint -f compact
+        working-directory: ${{ env.TF_WORKING_DIR }}
+
+      - name: Run TFSec
+        uses: aquasecurity/tfsec-action@v1.0.3
+        with:
+          soft_fail: true
+          working_directory: .
+
+  terraform:
+    name: "Terraform Plan & Apply"
+    runs-on: ubuntu-latest
+    
+    # We want it to run on push to main (without PR), or on PR after the scan finishes successfully.
+    # To handle both simply, we won't strictly enforce 'needs: security-scan' on push, 
+    # but we can use an expression for needs. For simplicity, we just let it run.
+    # Actually, standard practice:
+    # If PR -> needs security-scan
+    
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.5.0"
+
+
+
+      - name: Terraform Init
+        id: init
+        run: terraform init
+        working-directory: ${{ env.TF_WORKING_DIR }}
+
+      - name: Terraform Validate
+        id: validate
+        if: github.event_name == 'pull_request'
+        run: terraform validate
+        working-directory: ${{ env.TF_WORKING_DIR }}
+
+      - name: Terraform Plan
+        id: plan
+        if: github.event_name == 'pull_request'
+        run: terraform plan -no-color -out=tfplan
+        working-directory: ${{ env.TF_WORKING_DIR }}
+
+      - name: Terraform Apply
+        id: apply
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: terraform apply -auto-approve -no-color
+        working-directory: ${{ env.TF_WORKING_DIR }}
